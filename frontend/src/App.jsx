@@ -5,11 +5,13 @@ function App() {
   const [sentence, setSentence] = useState("");
   const [startYear, setStartYear] = useState(2019);
   const [endYear, setEndYear] = useState(2026);
+  const [citationStyle, setCitationStyle] = useState("APA");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const email = "henryyhude@gmail.com";
-  const phone = "+233 509927178";
+  const email = "Statedgeconsult@gmail.com";
+  const phone = "+233 558086317";
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || "https://statedge-citation-app.onrender.com";
 
   const generateCitation = async () => {
     if (!sentence.trim()) {
@@ -22,7 +24,7 @@ function App() {
 
     try {
       const response = await fetch(
-        "https://statedge-citation-app.onrender.com/generate-citation",
+        `${backendUrl}/generate-citation`,
         {
           method: "POST",
           headers: {
@@ -31,7 +33,8 @@ function App() {
           body: JSON.stringify({
             sentence: sentence,
             start_year: Number(startYear),
-            end_year: Number(endYear)
+            end_year: Number(endYear),
+            style: citationStyle,
           })
         }
       );
@@ -85,7 +88,7 @@ function App() {
     <div style={styles.page}>
       <div style={styles.header}>
         <button style={styles.backButton} onClick={() => setPage("welcome")}>
-          ← Back
+          Back
         </button>
 
         <img src="/logo.png" alt="Logo" style={styles.smallLogo} />
@@ -107,8 +110,20 @@ function App() {
           placeholder="Example: Artificial intelligence improves education among students..."
           value={sentence}
           onChange={(e) => setSentence(e.target.value)}
-          style={styles.textarea}
-        />
+          style={styles.textarea} />
+
+        <div style={styles.fieldGroup}>
+          <label style={styles.label}>Citation Style</label>
+          <select
+            value={citationStyle}
+            onChange={(e) => setCitationStyle(e.target.value)}
+            style={styles.select}
+          >
+            <option value="APA">APA</option>
+            <option value="MLA">MLA</option>
+            <option value="Chicago">Chicago</option>
+          </select>
+        </div>
 
         <div style={styles.row}>
           <div>
@@ -117,8 +132,7 @@ function App() {
               type="number"
               value={startYear}
               onChange={(e) => setStartYear(e.target.value)}
-              style={styles.input}
-            />
+              style={styles.input} />
           </div>
 
           <div>
@@ -127,8 +141,7 @@ function App() {
               type="number"
               value={endYear}
               onChange={(e) => setEndYear(e.target.value)}
-              style={styles.input}
-            />
+              style={styles.input} />
           </div>
         </div>
 
@@ -138,14 +151,23 @@ function App() {
       </div>
 
       <div style={styles.results}>
+        {results.length === 0 && !loading && (
+          <p style={styles.noResults}>Enter a sentence and click Generate Citation to start.</p>
+        )}
+
         {results.map((item, index) => (
           <div key={index} style={styles.resultCard}>
             <h3 style={styles.resultTitle}>{item.title}</h3>
 
             <p><strong>Sentence:</strong> {item.sentence_with_citation}</p>
-            <p><strong>Citation:</strong> {item.citation}</p>
+            <p><strong>{citationStyle} In-text citation:</strong> {item.citation}</p>
+            <p><strong>Reference:</strong> {item.reference}</p>
             <p><strong>Authors:</strong> {item.authors}</p>
             <p><strong>Year:</strong> {item.year}</p>
+            <p><strong>Exact word matches:</strong> {item.exact_match_count}</p>
+            {item.matched_keywords?.length > 0 && (
+              <p><strong>Matched keywords:</strong> {item.matched_keywords.join(", ")}</p>
+            )}
             <p><strong>Relevance Score:</strong> {item.similarity_score}</p>
             <p><strong>Cited By:</strong> {item.cited_by_count}</p>
 
@@ -289,6 +311,19 @@ const styles = {
     marginBottom: "18px",
     outline: "none",
     boxSizing: "border-box"
+  },
+  fieldGroup: {
+    marginBottom: "18px",
+    maxWidth: "320px"
+  },
+  select: {
+    width: "100%",
+    padding: "12px",
+    fontSize: "16px",
+    borderRadius: "10px",
+    border: "1px solid #b8d6f7",
+    outline: "none",
+    background: "white"
   },
   row: {
     display: "flex",
