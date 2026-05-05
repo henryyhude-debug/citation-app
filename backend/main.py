@@ -3,11 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import re
+import math
+from collections import Counter
 from urllib.parse import quote
-from sentence_transformers import SentenceTransformer, util
 
 app = FastAPI()
-model = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,12 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def load_model():
-    global model
-    if model is None:
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-    return model
 
 class CitationRequest(BaseModel):
     sentence: str
@@ -60,6 +54,41 @@ def extract_keywords(sentence: str, limit: int = 10) -> list[str]:
         if len(keywords) >= limit:
             break
     return keywords
+
+
+def get_content_tokens(text: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9']+", normalize_text(text))
+    return [token for token in tokens if len(token) > 3 and token not in STOPWORDS]
+
+
+def cosine_similarity(left: Counter, right: Counter) -> float:
+    if not left or not right:
+        return 0.0
+
+    shared = set(left) & set(right)
+    dot_product = sum(left[token] * right[token] for token in shared)
+    left_norm = math.sqrt(sum(value * value for value in left.values()))
+    right_norm = math.sqrt(sum(value * value for value in right.values()))
+    if not left_norm or not right_norm:
+        return 0.0
+    return dot_product / (left_norm * right_norm)
+
+
+def lightweight_similarity(sentence: str, paper: dict, keywords: list[str]) -> float:
+    query_tokens = Counter(get_content_tokens(sentence))
+    paper_text = " ".join([paper.get("title", ""), paper.get("abstract", ""), paper.get("venue", "")])
+    paper_tokens = Counter(get_content_tokens(paper_text))
+    token_score = cosine_similarity(query_tokens, paper_tokens)
+
+    normalized_sentence = normalize_text(sentence)
+    normalized_title = normalize_text(paper.get("title", ""))
+    phrase_bonus = 0.12 if normalized_sentence and normalized_sentence in normalize_text(paper_text) else 0
+    title_bonus = 0.0
+    if keywords:
+        title_matches = sum(1 for keyword in keywords if re.search(rf"\b{re.escape(keyword)}\b", normalized_title))
+        title_bonus = min(title_matches / len(keywords), 1.0) * 0.18
+
+    return min(token_score + phrase_bonus + title_bonus, 1.0)
 
 
 def build_openalex_query(keywords: list[str]) -> str:
@@ -297,22 +326,9 @@ def rank_papers(sentence: str, papers: list[dict], keywords: list[str]) -> list[
     if not papers:
         return []
 
-    texts = []
-    for paper in papers:
-        texts.append(f"{paper.get('title', '')} {paper.get('abstract', '')}")
-
-    try:
-        model = load_model()
-        embeddings = model.encode([sentence] + texts, convert_to_tensor=True)
-        user_embedding = embeddings[0]
-        work_embeddings = embeddings[1:]
-        similarities = util.cos_sim(user_embedding, work_embeddings)[0]
-    except Exception:
-        similarities = [0.0] * len(papers)
-
     scored = []
-    for i, paper in enumerate(papers):
-        score = float(similarities[i]) if i < len(similarities) else 0.0
+    for paper in papers:
+        score = lightweight_similarity(sentence, paper, keywords)
         paper["similarity_score"] = score
         match_info = get_match_info(sentence, paper, keywords)
         paper.update(match_info)
@@ -339,7 +355,7 @@ def search_openalex(query: str, start_year: int, end_year: int) -> list[dict]:
         f"&filter=from_publication_date:{start_year}-01-01,"
         f"to_publication_date:{end_year}-12-31"
         "&sort=relevance_score:desc"
-        "&per-page=20"
+        "&per-page=10"
     )
     response = requests.get(url, timeout=20)
     response.raise_for_status()
@@ -350,7 +366,7 @@ def search_semantic_scholar(query: str, start_year: int, end_year: int) -> list[
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     params = {
         "query": query,
-        "limit": 20,
+        "limit": 10,
         "year": f"{start_year}-{end_year}",
         "fields": "title,year,abstract,authors,venue,citationCount,externalIds,url",
     }
@@ -364,7 +380,7 @@ def search_crossref(query: str, start_year: int, end_year: int) -> list[dict]:
     params = {
         "query.bibliographic": query,
         "filter": f"from-pub-date:{start_year}-01-01,until-pub-date:{end_year}-12-31",
-        "rows": 20,
+        "rows": 10,
         "select": "DOI,title,author,container-title,published,published-print,published-online,issued,abstract,is-referenced-by-count,URL",
     }
     response = requests.get(url, params=params, timeout=20)

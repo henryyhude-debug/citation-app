@@ -1,7 +1,4 @@
 fastapi
 uvicorn
 requests
-sentence-transformers
 pydantic
-python-multipart
-torch
