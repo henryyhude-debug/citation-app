@@ -172,7 +172,7 @@ function App() {
             {item.title_keyword_matches?.length > 0 && (
               <p><strong>Title keyword overlap:</strong> {item.title_keyword_matches.join(", ")}</p>
             )}
-            <p><strong>AI Similarity Score:</strong> {item.similarity_score}</p>
+            <p><strong>AI Similarity Score:</strong> {item.similarity_score} ({item.similarity_label})</p>
             <p><strong>Ranking Score:</strong> {item.ranking_score}</p>
             <p><strong>Cited By:</strong> {item.cited_by_count}</p>
 

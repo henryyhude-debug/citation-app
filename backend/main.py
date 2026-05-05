@@ -324,6 +324,14 @@ def rank_papers(sentence: str, papers: list[dict], keywords: list[str]) -> list[
     return scored
 
 
+def get_similarity_label(score: float) -> str:
+    if score >= 0.60:
+        return "Very strong"
+    if score >= 0.45:
+        return "Acceptable"
+    return "Weak"
+
+
 def search_openalex(query: str, start_year: int, end_year: int) -> list[dict]:
     url = (
         f"https://api.openalex.org/works?search={quote(query)}"
@@ -416,6 +424,7 @@ def generate_citation(request: CitationRequest):
             "sources": paper.get("sources", []),
             "cited_by_count": paper.get("cited_by_count", 0),
             "similarity_score": round(paper.get("similarity_score", 0), 3),
+            "similarity_label": get_similarity_label(paper.get("similarity_score", 0)),
             "ranking_score": round(paper.get("ranking_score", 0), 3),
             "abstract": paper.get("abstract", "No abstract available."),
             "matched_keywords": paper.get("matched_keywords", []),
