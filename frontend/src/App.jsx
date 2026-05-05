@@ -164,11 +164,16 @@ function App() {
             <p><strong>Reference:</strong> {item.reference}</p>
             <p><strong>Authors:</strong> {item.authors}</p>
             <p><strong>Year:</strong> {item.year}</p>
+            <p><strong>Sources:</strong> {item.sources?.join(", ") || "Unknown"}</p>
             <p><strong>Exact word matches:</strong> {item.exact_match_count}</p>
             {item.matched_keywords?.length > 0 && (
               <p><strong>Matched keywords:</strong> {item.matched_keywords.join(", ")}</p>
             )}
-            <p><strong>Relevance Score:</strong> {item.similarity_score}</p>
+            {item.title_keyword_matches?.length > 0 && (
+              <p><strong>Title keyword overlap:</strong> {item.title_keyword_matches.join(", ")}</p>
+            )}
+            <p><strong>AI Similarity Score:</strong> {item.similarity_score}</p>
+            <p><strong>Ranking Score:</strong> {item.ranking_score}</p>
             <p><strong>Cited By:</strong> {item.cited_by_count}</p>
 
             <a href={item.link} target="_blank" rel="noreferrer" style={styles.sourceButton}>

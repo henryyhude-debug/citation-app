@@ -66,6 +66,32 @@ def build_openalex_query(keywords: list[str]) -> str:
     return quote(" ".join(keywords)) if keywords else ""
 
 
+def clean_markup(text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", str(text or ""))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_doi(doi: str) -> str:
+    doi = str(doi or "").strip().lower()
+    doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+    doi = doi.replace("doi:", "").strip()
+    return doi
+
+
+def normalize_title(title: str) -> str:
+    return re.sub(r"\s+", " ", normalize_text(title)).strip()
+
+
+def get_source_from_openalex(work: dict) -> str:
+    primary_location = work.get("primary_location") or {}
+    source = primary_location.get("source") or {}
+    return (
+        source.get("display_name")
+        or work.get("host_venue", {}).get("display_name", "")
+        or ""
+    )
+
+
 def get_abstract(abstract_index) -> str:
     if not isinstance(abstract_index, dict):
         return "No abstract available."
@@ -80,13 +106,34 @@ def get_abstract(abstract_index) -> str:
     return " ".join(word for _, word in words) if words else "No abstract available."
 
 
-def format_authors(authorships: list[dict]) -> str:
+def get_year_from_crossref_date(date_parts: dict) -> int | None:
+    parts = (date_parts or {}).get("date-parts") or []
+    if parts and parts[0]:
+        return parts[0][0]
+    return None
+
+
+def get_crossref_authors(authors: list[dict]) -> list[str]:
+    names = []
+    for author in authors or []:
+        given = author.get("given", "")
+        family = author.get("family", "")
+        name = " ".join(part for part in [given, family] if part).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def get_openalex_authors(authorships: list[dict]) -> list[str]:
     names = []
     for item in authorships:
         name = item.get("author", {}).get("display_name", "").strip()
         if name:
             names.append(name)
+    return names
 
+
+def format_author_list(names: list[str]) -> str:
     if not names:
         return "Unknown"
     if len(names) == 1:
@@ -96,52 +143,163 @@ def format_authors(authorships: list[dict]) -> str:
     return f"{names[0]} et al."
 
 
-def format_reference(work: dict, style: str = "APA") -> str:
-    title = work.get("display_name", "No title")
-    year = work.get("publication_year")
-    authors = format_authors(work.get("authorships", []))
-    journal = work.get("host_venue", {}).get("display_name", "")
-    doi = work.get("doi", "")
-    doi_link = f"https://doi.org/{doi}" if doi else work.get("id", "")
-
-    if style.upper() == "APA":
-        parts = [authors, f"({year})." if year else "(n.d.).", f"{title}."]
-        if journal:
-            parts.append(f"{journal}.")
-        if doi_link:
-            parts.append(doi_link)
-        return " ".join(part for part in parts if part)
-
-    return f"{authors} ({year}). {title}. {journal}. {doi_link}"
+def format_authors(authorships: list[dict]) -> str:
+    return format_author_list(get_openalex_authors(authorships))
 
 
-def get_match_info(sentence: str, work: dict, keywords: list[str]) -> dict:
-    document = " ".join(
-        [
-            work.get("display_name", ""),
-            get_abstract(work.get("abstract_inverted_index")),
-            work.get("host_venue", {}).get("display_name", ""),
-        ]
-    )
-    normalized = normalize_text(document)
-    matched = []
-    for keyword in keywords:
-        if re.search(rf"\b{re.escape(keyword)}\b", normalized):
-            matched.append(keyword)
+def apa_author_name(name: str) -> str:
+    parts = [part for part in re.split(r"\s+", name.strip()) if part]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    family = parts[-1]
+    initials = " ".join(f"{part[0].upper()}." for part in parts[:-1] if part)
+    return f"{family}, {initials}".strip()
+
+
+def format_apa_authors(names: list[str]) -> str:
+    formatted = [apa_author_name(name) for name in names if apa_author_name(name)]
+    if not formatted:
+        return "Unknown"
+    if len(formatted) == 1:
+        return formatted[0]
+    if len(formatted) <= 20:
+        return f"{', '.join(formatted[:-1])}, & {formatted[-1]}"
+    return f"{', '.join(formatted[:19])}, ... {formatted[-1]}"
+
+
+def format_apa_reference(paper: dict) -> str:
+    authors = format_apa_authors(paper.get("authors", []))
+    year = paper.get("year") or "n.d."
+    title = clean_markup(paper.get("title") or "No title").rstrip(".")
+    venue = clean_markup(paper.get("venue") or "").rstrip(".")
+    doi = normalize_doi(paper.get("doi"))
+    link = f"https://doi.org/{doi}" if doi else paper.get("url", "")
+
+    parts = [f"{authors} ({year}).", f"{title}."]
+    if venue:
+        parts.append(f"{venue}.")
+    if link:
+        parts.append(link)
+    return " ".join(parts)
+
+
+def normalize_openalex_work(work: dict) -> dict:
+    doi = normalize_doi(work.get("doi"))
+    url = f"https://doi.org/{doi}" if doi else work.get("id", "")
     return {
-        "matched_keywords": matched,
-        "exact_match_count": len(matched),
+        "title": work.get("display_name", "No title"),
+        "year": work.get("publication_year"),
+        "authors": get_openalex_authors(work.get("authorships", [])),
+        "venue": get_source_from_openalex(work),
+        "doi": doi,
+        "url": url,
+        "abstract": get_abstract(work.get("abstract_inverted_index")),
+        "cited_by_count": work.get("cited_by_count", 0),
+        "sources": ["OpenAlex"],
     }
 
 
-def rank_works(sentence: str, works: list[dict], keywords: list[str]) -> list[dict]:
-    if not works:
+def normalize_semantic_scholar_paper(paper: dict) -> dict:
+    external_ids = paper.get("externalIds") or {}
+    doi = normalize_doi(external_ids.get("DOI"))
+    url = f"https://doi.org/{doi}" if doi else paper.get("url", "")
+    return {
+        "title": paper.get("title", "No title"),
+        "year": paper.get("year"),
+        "authors": [author.get("name", "") for author in paper.get("authors", []) if author.get("name")],
+        "venue": paper.get("venue", ""),
+        "doi": doi,
+        "url": url,
+        "abstract": paper.get("abstract") or "No abstract available.",
+        "cited_by_count": paper.get("citationCount", 0),
+        "sources": ["Semantic Scholar"],
+    }
+
+
+def normalize_crossref_work(work: dict) -> dict:
+    title = (work.get("title") or ["No title"])[0]
+    venue = (work.get("container-title") or [""])[0]
+    doi = normalize_doi(work.get("DOI"))
+    year = (
+        get_year_from_crossref_date(work.get("published-print"))
+        or get_year_from_crossref_date(work.get("published-online"))
+        or get_year_from_crossref_date(work.get("published"))
+        or get_year_from_crossref_date(work.get("issued"))
+    )
+    return {
+        "title": clean_markup(title),
+        "year": year,
+        "authors": get_crossref_authors(work.get("author", [])),
+        "venue": clean_markup(venue),
+        "doi": doi,
+        "url": f"https://doi.org/{doi}" if doi else work.get("URL", ""),
+        "abstract": clean_markup(work.get("abstract")) or "No abstract available.",
+        "cited_by_count": work.get("is-referenced-by-count", 0),
+        "sources": ["Crossref"],
+    }
+
+
+def get_match_info(sentence: str, paper: dict, keywords: list[str]) -> dict:
+    document = " ".join(
+        [
+            paper.get("title", ""),
+            paper.get("abstract", ""),
+            paper.get("venue", ""),
+        ]
+    )
+    normalized = normalize_text(document)
+    normalized_title = normalize_text(paper.get("title", ""))
+    matched = []
+    title_matches = []
+    for keyword in keywords:
+        if re.search(rf"\b{re.escape(keyword)}\b", normalized):
+            matched.append(keyword)
+        if re.search(rf"\b{re.escape(keyword)}\b", normalized_title):
+            title_matches.append(keyword)
+    return {
+        "matched_keywords": matched,
+        "title_keyword_matches": title_matches,
+        "exact_match_count": len(matched),
+        "title_overlap_count": len(title_matches),
+        "keyword_overlap_score": round(len(matched) / len(keywords), 3) if keywords else 0,
+    }
+
+
+def dedupe_papers(papers: list[dict]) -> list[dict]:
+    deduped = {}
+    for paper in papers:
+        title_key = normalize_title(paper.get("title", ""))
+        if not title_key:
+            continue
+        key = f"doi:{paper['doi']}" if paper.get("doi") else f"title:{title_key}:{paper.get('year') or ''}"
+        existing = deduped.get(key)
+        if not existing:
+            deduped[key] = paper
+            continue
+
+        existing_sources = set(existing.get("sources", []))
+        existing_sources.update(paper.get("sources", []))
+        existing["sources"] = sorted(existing_sources)
+        if existing.get("abstract") == "No abstract available." and paper.get("abstract") != "No abstract available.":
+            existing["abstract"] = paper.get("abstract")
+        if not existing.get("doi") and paper.get("doi"):
+            existing["doi"] = paper.get("doi")
+            existing["url"] = paper.get("url")
+        if len(paper.get("authors", [])) > len(existing.get("authors", [])):
+            existing["authors"] = paper.get("authors", [])
+        existing["cited_by_count"] = max(existing.get("cited_by_count", 0), paper.get("cited_by_count", 0))
+    return list(deduped.values())
+
+
+def rank_papers(sentence: str, papers: list[dict], keywords: list[str]) -> list[dict]:
+    if not papers:
         return []
 
     texts = []
-    for work in works:
-        abstract = get_abstract(work.get("abstract_inverted_index"))
-        texts.append(f"{work.get('display_name', '')} {abstract}")
+    for paper in papers:
+        texts.append(f"{paper.get('title', '')} {paper.get('abstract', '')}")
 
     try:
         model = load_model()
@@ -150,19 +308,59 @@ def rank_works(sentence: str, works: list[dict], keywords: list[str]) -> list[di
         work_embeddings = embeddings[1:]
         similarities = util.cos_sim(user_embedding, work_embeddings)[0]
     except Exception:
-        similarities = [0.0] * len(works)
+        similarities = [0.0] * len(papers)
 
     scored = []
-    for i, work in enumerate(works):
+    for i, paper in enumerate(papers):
         score = float(similarities[i]) if i < len(similarities) else 0.0
-        work["similarity_score"] = score
-        match_info = get_match_info(sentence, work, keywords)
-        work.update(match_info)
-        work["match_strength"] = work["exact_match_count"] * 10 + score
-        scored.append(work)
+        paper["similarity_score"] = score
+        match_info = get_match_info(sentence, paper, keywords)
+        paper.update(match_info)
+        paper["ranking_score"] = score + (paper["title_overlap_count"] * 0.04) + (paper["keyword_overlap_score"] * 0.08)
+        if score >= 0.45:
+            scored.append(paper)
 
-    scored.sort(key=lambda w: (w["match_strength"], w["similarity_score"]), reverse=True)
+    scored.sort(key=lambda item: (item["ranking_score"], item["similarity_score"]), reverse=True)
     return scored
+
+
+def search_openalex(query: str, start_year: int, end_year: int) -> list[dict]:
+    url = (
+        f"https://api.openalex.org/works?search={quote(query)}"
+        f"&filter=from_publication_date:{start_year}-01-01,"
+        f"to_publication_date:{end_year}-12-31"
+        "&sort=relevance_score:desc"
+        "&per-page=20"
+    )
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    return [normalize_openalex_work(work) for work in response.json().get("results", [])]
+
+
+def search_semantic_scholar(query: str, start_year: int, end_year: int) -> list[dict]:
+    url = "https://api.semanticscholar.org/graph/v1/paper/search"
+    params = {
+        "query": query,
+        "limit": 20,
+        "year": f"{start_year}-{end_year}",
+        "fields": "title,year,abstract,authors,venue,citationCount,externalIds,url",
+    }
+    response = requests.get(url, params=params, timeout=20)
+    response.raise_for_status()
+    return [normalize_semantic_scholar_paper(paper) for paper in response.json().get("data", [])]
+
+
+def search_crossref(query: str, start_year: int, end_year: int) -> list[dict]:
+    url = "https://api.crossref.org/works"
+    params = {
+        "query.bibliographic": query,
+        "filter": f"from-pub-date:{start_year}-01-01,until-pub-date:{end_year}-12-31",
+        "rows": 20,
+        "select": "DOI,title,author,container-title,published,published-print,published-online,issued,abstract,is-referenced-by-count,URL",
+    }
+    response = requests.get(url, params=params, timeout=20)
+    response.raise_for_status()
+    return [normalize_crossref_work(work) for work in response.json().get("message", {}).get("items", [])]
 
 
 @app.get("/")
@@ -178,52 +376,63 @@ def generate_citation(request: CitationRequest):
 
     start_year = request.start_year
     end_year = request.end_year
-    style = request.style or "APA"
 
     keywords = extract_keywords(sentence)
-    query = build_openalex_query(keywords) or quote(sentence)
+    query = " ".join(keywords) if keywords else sentence
 
-    url = (
-        f"https://api.openalex.org/works?search={query}"
-        f"&filter=from_publication_date:{start_year}-01-01,"
-        f"to_publication_date:{end_year}-12-31"
-        "&sort=relevance_score:desc"
-        "&per-page=15"
-    )
+    papers = []
+    search_errors = {}
+    searchers = {
+        "OpenAlex": search_openalex,
+        "Semantic Scholar": search_semantic_scholar,
+        "Crossref": search_crossref,
+    }
 
-    response = requests.get(url, timeout=20)
-    response.raise_for_status()
-    data = response.json()
+    for source, searcher in searchers.items():
+        try:
+            papers.extend(searcher(query, start_year, end_year))
+        except requests.RequestException as error:
+            search_errors[source] = str(error)
 
-    works = data.get("results", [])
-    works = rank_works(sentence, works, keywords)
+    unique_papers = dedupe_papers(papers)
+    ranked_papers = rank_papers(sentence, unique_papers, keywords)
 
     results = []
-    for work in works:
-        year = work.get("publication_year")
-        author_text = format_authors(work.get("authorships", []))
+    for paper in ranked_papers:
+        year = paper.get("year")
+        author_text = format_author_list(paper.get("authors", []))
         citation = f"({author_text}, {year})" if year else f"({author_text})"
-        reference = format_reference(work, style=style)
-        link = f"https://doi.org/{work.get('doi')}" if work.get('doi') else work.get('id', "")
 
         results.append({
-            "title": work.get("display_name", "No title"),
+            "title": paper.get("title", "No title"),
             "year": year or "n.d.",
             "authors": author_text,
             "citation": citation,
-            "reference": reference,
+            "reference": format_apa_reference(paper),
             "sentence_with_citation": f"{sentence} {citation}",
-            "link": link,
-            "cited_by_count": work.get("cited_by_count", 0),
-            "similarity_score": round(work.get("similarity_score", 0), 3),
-            "abstract": get_abstract(work.get("abstract_inverted_index")),
-            "matched_keywords": work.get("matched_keywords", []),
-            "exact_match_count": work.get("exact_match_count", 0),
+            "link": paper.get("url", ""),
+            "doi": paper.get("doi", ""),
+            "venue": paper.get("venue", ""),
+            "sources": paper.get("sources", []),
+            "cited_by_count": paper.get("cited_by_count", 0),
+            "similarity_score": round(paper.get("similarity_score", 0), 3),
+            "ranking_score": round(paper.get("ranking_score", 0), 3),
+            "abstract": paper.get("abstract", "No abstract available."),
+            "matched_keywords": paper.get("matched_keywords", []),
+            "title_keyword_matches": paper.get("title_keyword_matches", []),
+            "exact_match_count": paper.get("exact_match_count", 0),
+            "title_overlap_count": paper.get("title_overlap_count", 0),
+            "keyword_overlap_score": paper.get("keyword_overlap_score", 0),
         })
 
     return {
         "original_sentence": sentence,
         "year_range": f"{start_year}-{end_year}",
         "search_keywords": keywords,
+        "minimum_similarity_score": 0.45,
+        "searched_sources": list(searchers.keys()),
+        "source_errors": search_errors,
+        "total_before_dedupe": len(papers),
+        "total_after_dedupe": len(unique_papers),
         "results": results,
     }
