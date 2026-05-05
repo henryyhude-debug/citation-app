@@ -316,7 +316,8 @@ def rank_papers(sentence: str, papers: list[dict], keywords: list[str]) -> list[
         paper["similarity_score"] = score
         match_info = get_match_info(sentence, paper, keywords)
         paper.update(match_info)
-        paper["ranking_score"] = score + (paper["title_overlap_count"] * 0.04) + (paper["keyword_overlap_score"] * 0.08)
+        paper["final_score"] = (0.6 * score) + (0.4 * paper["keyword_overlap_score"])
+        paper["ranking_score"] = paper["final_score"]
         if score >= 0.45:
             scored.append(paper)
 
@@ -425,6 +426,7 @@ def generate_citation(request: CitationRequest):
             "cited_by_count": paper.get("cited_by_count", 0),
             "similarity_score": round(paper.get("similarity_score", 0), 3),
             "similarity_label": get_similarity_label(paper.get("similarity_score", 0)),
+            "final_score": round(paper.get("final_score", 0), 3),
             "ranking_score": round(paper.get("ranking_score", 0), 3),
             "abstract": paper.get("abstract", "No abstract available."),
             "matched_keywords": paper.get("matched_keywords", []),

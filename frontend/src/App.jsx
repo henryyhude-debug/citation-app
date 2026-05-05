@@ -173,7 +173,8 @@ function App() {
               <p><strong>Title keyword overlap:</strong> {item.title_keyword_matches.join(", ")}</p>
             )}
             <p><strong>AI Similarity Score:</strong> {item.similarity_score} ({item.similarity_label})</p>
-            <p><strong>Ranking Score:</strong> {item.ranking_score}</p>
+            <p><strong>Keyword Match Score:</strong> {item.keyword_overlap_score}</p>
+            <p><strong>Final Score:</strong> {item.final_score}</p>
             <p><strong>Cited By:</strong> {item.cited_by_count}</p>
 
             <a href={item.link} target="_blank" rel="noreferrer" style={styles.sourceButton}>
